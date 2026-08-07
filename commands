@@ -1,0 +1,13 @@
+Rodar versao Sequential standalone:
+gcc -O3 Sequential.c -o output/seq
+./output/seq {Linha_do_Problema} {Silent_Mode}
+
+Rodar versao Omp standalone
+gcc -O3 -fopenmp Omp.c -o output/omp
+./output/omp {Linha_do_Problema} {Silent_Mode}
+
+Rodar testes versao Sequential
+./run_seq_tests.sh {Numero_de_Problemas}
+
+Rodar testes versao Omp
+./run_omp_tests.sh {Numero_de_Problemas}
