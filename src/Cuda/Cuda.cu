@@ -9,6 +9,7 @@
 #define POP_SIZE 196608
 #define ISLANDS 384
 #define ISLAND_POP_SIZE (POP_SIZE / ISLANDS)
+#define WARPS_PER_ISLAND (ISLAND_POP_SIZE / 32)
 
 #define TOURNAMENT_SIZE (int)(ISLAND_POP_SIZE * 0.20)
 
@@ -29,7 +30,7 @@ typedef struct {
 
 //Funcao de reducao para os warps
 __device__ int warpReduceMin(int val) {
-    for (int offset = 16; offset > 0; offset /= 2) {
+    for (int offset = WARPS_PER_ISLAND; offset > 0; offset /= 2) {
         int shfl = __shfl_down_sync(0xffffffff, val, offset);
         if (shfl < val) {
             val = shfl;
@@ -350,7 +351,7 @@ __global__ void geneticKernel(int* d_chromosomes, int* d_fitness, int* cluesMask
 
     int myBest = warpReduceMin(mistakes);
 
-    __shared__ int warpMins[16];
+    __shared__ int warpMins[WARPS_PER_ISLAND];
     __shared__ int deleted[ISLAND_POP_SIZE];
     __shared__ int sharedEliteFit;
     
@@ -361,7 +362,7 @@ __global__ void geneticKernel(int* d_chromosomes, int* d_fitness, int* cluesMask
     __syncthreads(); 
 
     if (warpId == 0) {
-        int val = (laneId < 16) ? warpMins[laneId] : 999;
+        int val = (laneId < WARPS_PER_ISLAND) ? warpMins[laneId] : 999;
         int localBest = warpReduceMin(val);
 
         if (laneId == 0) {
