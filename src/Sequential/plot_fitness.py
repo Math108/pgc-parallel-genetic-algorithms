@@ -1,15 +1,17 @@
 import pandas as pd
+import pandas as pd
 import matplotlib.pyplot as plt
 import sys
 import os
 
-if len(sys.argv) < 2:
-    print("❌ Erro: Passe o número da linha do Sudoku como argumento.")
+if len(sys.argv) < 3:
+    print("❌ Erro: Passe a linha do Sudoku e o ID da repetição.")
     sys.exit(1)
 
 problem_id = sys.argv[1]
+run_id = sys.argv[2]
 
-base_path = f"Graphs/problem_{problem_id}"
+base_path = f"Graphs/problem_{problem_id}_run_{run_id}"
 csv_filename = f"{base_path}/fitness_log_linha_{problem_id}.csv"
 png_filename = f"{base_path}/grafico_convergencia_{problem_id}.png"
 

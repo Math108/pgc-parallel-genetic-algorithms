@@ -82,7 +82,7 @@ with open(report_path, 'w', encoding='utf-8') as f:
     f.write(f"Tempo Medio por Sudoku:         {media_tempo:.3f} segundos\n")
     f.write(f"Tempo do Mais Rapido:           {tempo_min:.3f} segundos\n")
     f.write(f"Tempo do Mais Lento:            {tempo_max:.3f} segundos\n")
-    f.write(f"TEMPO TOTAL DE CPU (C):         {soma_tempo_total:.3f} segundos\n")
+    f.write(f"TEMPO TOTAL (Sequencial):       {soma_tempo_total:.3f} segundos\n")
     f.write("==================================================\n")
 
 image_files = glob.glob("Graphs/problem_*/grafico_*.png")

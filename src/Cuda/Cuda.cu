@@ -3,11 +3,11 @@
 #include <string.h>
 #include <time.h>
 #include <cuda_runtime.h>
-#include <curand_kernel.h>
+#include <curand_kernel.h> 
 
 #define MAX_GENERATIONS 2000
-#define POP_SIZE 48000
-#define ISLANDS 12
+#define POP_SIZE 196608
+#define ISLANDS 384
 #define ISLAND_POP_SIZE (POP_SIZE / ISLANDS)
 
 #define TOURNAMENT_SIZE (int)(ISLAND_POP_SIZE * 0.20)
@@ -16,8 +16,8 @@
 #define MUTATION_GROWTH 0.00050
 #define MUTATION_THRESHOLD 0.150
 
-#define MIGRATION_FREQUENCY 50
-#define MIGRATION_SIZE (int)(ISLAND_POP_SIZE * 0.05)
+#define MIGRATION_FREQUENCY 150
+#define MIGRATION_SIZE (int)(ISLAND_POP_SIZE * 0.02)
 
 typedef struct {
     int id;
@@ -25,818 +25,577 @@ typedef struct {
     int solution[81];
     int clues;
     float difficulty;
-
 } Sudoku;
 
-typedef struct {
-    int cromossome[81];
-    int fitness;
-} Individual;
-
-void printIndividual(Individual ind) {
-    for (int i = 0; i < 81; i++) {
-        printf("%d ", ind.cromossome[i]);
-        if ((i + 1) % 9 == 0) printf("\n");
-    }
-}
-
-void printIsland(Individual island[]) {
-    for (int i = 0; i < ISLAND_POP_SIZE; i++) {
-        printf("Individuo %d (Fitness = %d):\n", i, island[i].fitness);
-        printIndividual(island[i]);
-        printf("\n");
-    }
-}
-
-void printPopulation(Individual population[ISLANDS][ISLAND_POP_SIZE]) {
-    for (int i = 0; i < ISLANDS; i++) {
-        printf("Ilha %d:\n", i);
-        printIsland(population[i]);
-        printf("==============================\n");
-    }
-}
-
-void printReport(Individual population[ISLANDS][ISLAND_POP_SIZE], int generation, int noImprovementIsland[], int globalBest) {
-    printf("\n=========================================================================\n");
-    printf(" RELATORIO DA GERACAO %d | RECORD GERAL: %d ERROS\n", generation, globalBest);
-    printf("-------------------------------------------------------------------------\n");
-    printf(" ILHA | MELHOR | PIOR  | MEDIA  | ESTAGNACAO | DIVERSIDADE (Pior-Melhor)\n");
-    printf("-------------------------------------------------------------------------\n");
-
-    for (int i = 0; i < ISLANDS; i++) {
-        int best = 999;
-        int worst = -1;
-        long sum = 0;
-
-        for (int j = 0; j < ISLAND_POP_SIZE; j++) {
-            int fit = population[i][j].fitness;
-            if (fit < best) best = fit;
-            if (fit > worst) worst = fit;
-            sum += fit;
-        }
-
-        float avg = (float)sum / ISLAND_POP_SIZE;
-        int diversity = worst - best;
-
-        printf("  %02d  |   %03d  |  %03d  | %06.2f |   %06d   | %d erros de diferenca\n",
-               i, best, worst, avg, noImprovementIsland[i], diversity);
-    }
-    printf("=========================================================================\n\n");
-}
-
-void getTabuleiro(const char* strTab, int tabuleiro[81]) {
-    for (int i = 0; i < 81; i++) {
-        if (strTab[i] == '.') tabuleiro[i] = 0;
-        else tabuleiro[i] = strTab[i] - '0';
-    }
-}
-
-void printCluesMask(int cluesMask[81]) {
-    printf("Mascara de casas preenchidas:\n");
-    for (int i = 0; i < 81; i++) {
-        printf("%d ", cluesMask[i]);
-        if ((i + 1) % 9 == 0) printf("\n");
-    }
-}
-
-void printSudoku(Sudoku sudoku) {
-    printf("ID: %d\n", sudoku.id);
-    printf("Numero de casas preenchidas: %d\n", sudoku.clues);
-    printf("Dificuldade: %.2f\n", sudoku.difficulty);
-    printf("Tabuleiro:\n");
-    for (int i = 0; i < 81; i++) {
-        printf("%d ", sudoku.puzzle[i]);
-        if ((i + 1) % 9 == 0) printf("\n");
-    }
-    printf("Solucao:\n");
-    for (int i = 0; i < 81; i++) {
-        printf("%d ", sudoku.solution[i]);
-        if ((i + 1) % 9 == 0) printf("\n");
-    }
-}
-
-void printHighlightedSolution(Individual ind) {
-    int errorsMap[81] = {0};
-
-    for (int col = 0; col < 9; col++) {
-        int counts[10] = {0};
-        for (int row = 0; row < 9; row++) {
-            counts[ind.cromossome[row * 9 + col]]++;
-        }
-        for (int row = 0; row < 9; row++) {
-            if (counts[ind.cromossome[row * 9 + col]] > 1) {
-                errorsMap[row * 9 + col] = 1;
-            }
+//Funcao de reducao para os warps
+__device__ int warpReduceMin(int val) {
+    for (int offset = 16; offset > 0; offset /= 2) {
+        int shfl = __shfl_down_sync(0xffffffff, val, offset);
+        if (shfl < val) {
+            val = shfl;
         }
     }
 
-    for (int block = 0; block < 9; block++) {
-        int counts[10] = {0};
-        int startRow = (block / 3) * 3;
-        int startCol = (block % 3) * 3;
+    return val;
+}
 
-        for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-                counts[ind.cromossome[(startRow + i) * 9 + (startCol + j)]]++;
-            }
+//Funcao de Crossover adaptada
+__device__ void doCrossoverCuda(int* d_chromosomes, int globalId, int islandId, int* deleted, curandState* localState) {
+    int p1 = curand(localState) % ISLAND_POP_SIZE;
+    while (deleted[p1]) {
+        p1 = curand(localState) % ISLAND_POP_SIZE;
+    }
+
+    int p2 = curand(localState) % ISLAND_POP_SIZE;
+    while (p1 == p2 || deleted[p2]) {
+        p2 = curand(localState) % ISLAND_POP_SIZE;
+    }
+
+    int globalP1 = islandId * ISLAND_POP_SIZE + p1;
+    int globalP2 = islandId * ISLAND_POP_SIZE + p2;
+
+    for (int row = 0; row < 9; row++) {
+        int parentSource = (curand(localState) % 2 == 0) ? globalP1 : globalP2;
+        for (int col = 0; col < 9; col++) {
+            int geneIdx = row * 9 + col;
+            d_chromosomes[geneIdx * POP_SIZE + globalId] = d_chromosomes[geneIdx * POP_SIZE + parentSource];
         }
+    }
+}
+/*  Funcao de mutacao com heuristica adaptada
+*   instrucoes utilizadas: 
+*   __ldg(): Le uma variavel diretamente do cache de leitura
+*   __popc(): Conta quantos bits 1 existem na variavel
+*   __ffs(): Encontra a posicao do primeiro bit 1
+*/
+__device__ void doMutationCuda(int* d_chromosomes, int globalId, int islandId, int* cluesMask, int noImprovement, curandState* localState) {                     
+    float mutationChance = fminf(MUTATION_RATE + (MUTATION_GROWTH * noImprovement), MUTATION_THRESHOLD);
 
-        for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-                if (counts[ind.cromossome[(startRow + i) * 9 + (startCol + j)]] > 1) {
-                    errorsMap[(startRow + i) * 9 + (startCol + j)] = 1;
+    for (int row = 0; row < 9; row++) {
+        if (curand_uniform(localState) < mutationChance) {
+            
+            unsigned int errorMask = 0;
+            unsigned int perfectMask = 0;
+
+            for(int col = 0; col < 9; col++) {
+                int geneIdx = row * 9 + col;
+                
+                if(__ldg(&cluesMask[geneIdx]) == 0) {
+                    int val = d_chromosomes[geneIdx * POP_SIZE + globalId];
+                    int hasError = 0;
+
+                    for (int r = 0; r < 9; r++) {
+                        if (r != row && d_chromosomes[(r * 9 + col) * POP_SIZE + globalId] == val) {
+                            hasError = 1;
+                            break; 
+                        }
+                    }
+
+                    if (!hasError) {
+                        int startRow = (row / 3) * 3;
+                        int startCol = (col / 3) * 3;
+                        
+                        #pragma unroll
+                        for (int i = 0; i < 9; i++) {
+                            int r = i / 3;
+                            int c = i % 3;
+                            int actualRow = startRow + r;
+                            int actualCol = startCol + c;
+                            
+                            if (actualRow != row && actualCol != col && 
+                                d_chromosomes[(actualRow * 9 + actualCol) * POP_SIZE + globalId] == val) {
+                                hasError = 1; 
+                                break; 
+                            }
+                        }
+                    }
+
+                    if (hasError) {
+                        errorMask |= (1 << col);
+                    } else {
+                        perfectMask |= (1 << col);
+                    }
                 }
             }
-        }
-    }
 
-    for (int i = 0; i < 81; i++) {
-        if (errorsMap[i] == 1) {
-            printf("\033[1;31m%d\033[0m ", ind.cromossome[i]);
-        } else {
-            printf("%d ", ind.cromossome[i]);
+            int errorCount = __popc(errorMask);
+            int perfectCount = __popc(perfectMask);
+
+            if (errorCount > 0) {
+                int randIdx = curand(localState) % errorCount;
+                int c1 = -1;
+                unsigned int tempMask = errorMask;
+                
+                for (int i = 0; i <= randIdx; i++) {
+                    c1 = __ffs(tempMask) - 1; 
+                    tempMask &= ~(1 << c1);
+                }
+
+                int c2 = c1;
+
+                if (errorCount > 1 && curand_uniform(localState) < 0.70f) {
+                    int randIdx2 = curand(localState) % errorCount;
+                    while(randIdx == randIdx2) {
+                        randIdx2 = curand(localState) % errorCount; 
+                    }
+                    
+                    tempMask = errorMask;
+                    for (int i = 0; i <= randIdx2; i++) {
+                        c2 = __ffs(tempMask) - 1;
+                        tempMask &= ~(1 << c2);
+                    }
+                } 
+                else if (perfectCount > 0) {
+                    int randIdx2 = curand(localState) % perfectCount;
+                    tempMask = perfectMask;
+                    for (int i = 0; i <= randIdx2; i++) {
+                        c2 = __ffs(tempMask) - 1;
+                        tempMask &= ~(1 << c2);
+                    }
+                } 
+
+                if (c1 != c2) {
+                    int geneIdx1 = row * 9 + c1;
+                    int geneIdx2 = row * 9 + c2;
+
+                    int tmp = d_chromosomes[geneIdx1 * POP_SIZE + globalId];
+
+                    d_chromosomes[geneIdx1 * POP_SIZE + globalId] = d_chromosomes[geneIdx2 * POP_SIZE + globalId];
+                    d_chromosomes[geneIdx2 * POP_SIZE + globalId] = tmp;
+                }
+            } 
+            else if (perfectCount >= 2 && noImprovement > 200) {
+                int randIdx1 = curand(localState) % perfectCount;
+                int randIdx2 = curand(localState) % perfectCount;
+
+                while(randIdx1 == randIdx2) {
+                    randIdx2 = curand(localState) % perfectCount;
+                }
+
+                int c1 = -1, c2 = -1;
+                unsigned int tempMask = perfectMask;
+
+                for (int i = 0; i <= randIdx1; i++) {
+                    c1 = __ffs(tempMask) - 1;
+                    tempMask &= ~(1 << c1);
+                }
+                
+                tempMask = perfectMask;
+                for (int i = 0; i <= randIdx2; i++) {
+                    c2 = __ffs(tempMask) - 1;
+                    tempMask &= ~(1 << c2);
+                }
+                
+                int geneIdx1 = row * 9 + c1;
+                int geneIdx2 = row * 9 + c2;
+
+                int tmp = d_chromosomes[geneIdx1 * POP_SIZE + globalId];
+
+                d_chromosomes[geneIdx1 * POP_SIZE + globalId] = d_chromosomes[geneIdx2 * POP_SIZE + globalId];
+                d_chromosomes[geneIdx2 * POP_SIZE + globalId] = tmp;
+            }
         }
-        if ((i + 1) % 9 == 0) printf("\n");
     }
 }
 
-//Calcula o fitness com base no numero de erros
-__global__ void calculateFitnessKernel(Individual (*population)[ISLAND_POP_SIZE]) {
-    int i = blockIdx.x;
-    int j = threadIdx.x;
+//Funcao de migracao assincrona adaptada
+__device__ void doMigrationCuda(int* d_chromosomes, int* d_fitness, int islandId, int globalId, int generation, curandState* state, int* d_mailbox, int* mailboxFull) {
+    if (atomicCAS(&mailboxFull[islandId], 1, 2) == 1) {
 
-    int mistakes = 0;
+        for (int m = 0; m < MIGRATION_SIZE; m++) {
+            int loserA = curand(&state[globalId]) % ISLAND_POP_SIZE;
+            int loserB = curand(&state[globalId]) % ISLAND_POP_SIZE;
+            int loserC = curand(&state[globalId]) % ISLAND_POP_SIZE;
 
-    for(int col = 0; col < 9; col++) {
-        int colValues[9] = {0};
-        int boxValues[9] = {0};
+            int fitLoserA = d_fitness[islandId * ISLAND_POP_SIZE + loserA];
+            int fitLoserB = d_fitness[islandId * ISLAND_POP_SIZE + loserB];
+            int fitLoserC = d_fitness[islandId * ISLAND_POP_SIZE + loserC];
 
-        int boxRow = (j / 3) * 3;
-        int boxCol = (j % 3) * 3;
+            int worstIdx = loserA;
+            int maxFit = fitLoserA;
 
-        for (int idx = 0; idx < 9; idx++) {
-            colValues[population[i][j].cromossome[idx * 9 + col] - 1]++;
-            boxValues[population[i][j].cromossome[(boxRow + idx / 3) * 9 + (boxCol + idx % 3)] - 1]++;
-        }
-
-        for (int k = 0; k < 9; k++) {
-            if (colValues[k] > 1) mistakes += colValues[k] - 1;
-            if (boxValues[k] > 1) mistakes += boxValues[k] - 1;
-        }
-
-        population[i][j].fitness = mistakes;
-    }
-}
-
-int calculateFitnessNoLines(Individual island[]) {
-    int islandBest = 999;
-    int bestIdx = -1;
-
-    for(int i = 0; i < ISLAND_POP_SIZE; i++) {
-        int mistakes = 0;
-
-        for (int j = 0; j < 9; j++) {
-
-            int colValues[9] = {0};
-            int boxValues[9] = {0};
-
-            int boxRow = (j / 3) * 3;
-            int boxCol = (j % 3) * 3;
-
-            for (int idx = 0; idx < 9; idx++) {
-                colValues[island[i].cromossome[idx * 9 + j] - 1]++;
-                boxValues[island[i].cromossome[(boxRow + idx / 3) * 9 + (boxCol + idx % 3)] - 1]++;
+            if (fitLoserB > maxFit) { 
+                worstIdx = loserB; 
+                maxFit = fitLoserB; 
+            }
+            if (fitLoserC > maxFit) { 
+                worstIdx = loserC; 
+                maxFit = fitLoserC; 
             }
 
-            for (int k = 0; k < 9; k++) {
-                if (colValues[k] > 1) mistakes += colValues[k] - 1;
-                if (boxValues[k] > 1) mistakes += boxValues[k] - 1;
+            int mailboxOffset = (islandId * MIGRATION_SIZE * 81) + (m * 81);
+            int indGlobalIdx = islandId * ISLAND_POP_SIZE + worstIdx;
+            
+            for(int i = 0; i < 81; i++) {
+                d_chromosomes[i * POP_SIZE + indGlobalIdx] = d_mailbox[mailboxOffset + i];
             }
         }
-
-        island[i].fitness = mistakes;
-        if (mistakes < islandBest) {
-            islandBest = mistakes;
-            bestIdx = i;
-        }
+        atomicExch(&mailboxFull[islandId], 0); 
     }
 
-    return bestIdx;
-}
+    if (generation > 0 && generation % MIGRATION_FREQUENCY == 0) {
+        int nextIsland = (islandId + 1) % ISLANDS;
+        
+        if (atomicCAS(&mailboxFull[nextIsland], 0, 2) == 0) {
+            for (int m = 0; m < MIGRATION_SIZE; m++) {
+                int fighterA = curand(&state[globalId]) % ISLAND_POP_SIZE;
+                int fighterB = curand(&state[globalId]) % ISLAND_POP_SIZE;
+                int fighterC = curand(&state[globalId]) % ISLAND_POP_SIZE;
 
-void printFitness(Individual island[]) {
-    printf("Fitness dos individuos:\n");
-    for (int i = 0; i < ISLAND_POP_SIZE; i++) {
-        printf("Individuo %d: Fitness = %d\n", i, island[i].fitness);
-    }
-}
+                int fitFighterA = d_fitness[islandId * ISLAND_POP_SIZE + fighterA];
+                int fitFighterB = d_fitness[islandId * ISLAND_POP_SIZE + fighterB];
+                int fitFighterC = d_fitness[islandId * ISLAND_POP_SIZE + fighterC];
 
-void printDeleted(int deleted[]) {
-    printf("Individuos deletados:\n");
-    for (int i = 0; i < TOURNAMENT_SIZE; i++) {
-        printf("Individuo %d\n", deleted[i]);
-    }
-}
+                int bestIdx = fighterA; 
+                int minFit = fitFighterA;
+                
+                if (fitFighterB < minFit) { 
+                    bestIdx = fighterB; 
+                    minFit = fitFighterB; 
+                }
+                if (fitFighterC < minFit) { 
+                    bestIdx = fighterC; 
+                    minFit = fitFighterC; 
+                }
 
-void doTournament(Individual island[], int deleted[]) {
-    for (int i = 0; i < TOURNAMENT_SIZE; i++) {
-
-        int fighter1, fighter2;
-        fighter1 = rand() % ISLAND_POP_SIZE;
-        fighter2 = rand() % ISLAND_POP_SIZE;
-
-        while(deleted[fighter1]) {
-            fighter1 = rand() % ISLAND_POP_SIZE;
-        }
-
-        while (fighter1 == fighter2 || deleted[fighter2]) {
-            fighter2 = rand() % ISLAND_POP_SIZE;
-        }
-
-        //printf("Torneio %d: Individuo %d (Fitness = %d) vs Individuo %d (Fitness = %d)\n", i, fighter1, island[fighter1].fitness, fighter2, island[fighter2].fitness);
-        if (island[fighter1].fitness < island[fighter2].fitness) {
-            deleted[fighter2] = 1;
-        } else {
-            deleted[fighter1] = 1;
+                int mailboxOffset = (nextIsland * MIGRATION_SIZE * 81) + (m * 81);
+                int indGlobalIdx = islandId * ISLAND_POP_SIZE + bestIdx;
+                
+                for(int i = 0; i < 81; i++) {
+                    d_mailbox[mailboxOffset + i] = d_chromosomes[i * POP_SIZE + indGlobalIdx];
+                }
+            }
+            atomicExch(&mailboxFull[nextIsland], 1); 
         }
     }
 }
 
-void doTournamentV2(Individual island[], int deleted[], int eliteFit) {
-    for (int i = 0; i < TOURNAMENT_SIZE; i++) {
+//Funcao de torneio adaptada e paralelizada
+__device__ void doTournamentCuda(int* d_fitness, int islandId, int globalId, int* deleted, curandState* state, int eliteFit) {
+    bool killConfirmed = false;
 
-        int fighter1, fighter2;
-        fighter1 = rand() % ISLAND_POP_SIZE;
-        fighter2 = rand() % ISLAND_POP_SIZE;
+    while (!killConfirmed) {
+        int f1 = curand(state) % ISLAND_POP_SIZE;
+        int f2 = curand(state) % ISLAND_POP_SIZE;
 
-        while(deleted[fighter1]) {
-            fighter1 = rand() % ISLAND_POP_SIZE;
-        }
-
-        while (fighter1 == fighter2 || deleted[fighter2]) {
-            fighter2 = rand() % ISLAND_POP_SIZE;
-        }
-
-        int best, worst;
-        if (island[fighter1].fitness < island[fighter2].fitness) {
-            best = fighter1;
-            worst = fighter2;
-        } else {
-            best = fighter2;
-            worst = fighter1;
-        }
-
-        int diff = island[worst].fitness - island[best].fitness;
-
-        if (diff == 0) {
-            deleted[worst] = 1;
+        if (f1 == f2 || deleted[f1] || deleted[f2]) {
             continue;
         }
 
-        float upsetChance;
+        int fit1 = d_fitness[islandId * ISLAND_POP_SIZE + f1];
+        int fit2 = d_fitness[islandId * ISLAND_POP_SIZE + f2];
 
-        if (island[best].fitness <= eliteFit) {
-            upsetChance = 0.0f;
-        } else {
-            if (diff <= 2) {
-                upsetChance = 0.50f;
-            } else if (diff <= 4) {
-                upsetChance = 0.25f;
-            } else if (diff <= 8) {
-                upsetChance = 0.10f;
-            } else {
-                upsetChance = 0.01f;
-            }
-        }
+        int best = (fit1 < fit2) ? f1 : f2;
+        int worst = (f1 == best) ? f2 : f1;
+        int diff = abs(fit2 - fit1); 
+        
+        float upsetChance = 0.01f;
+        
+        upsetChance = (diff <= 8) ? 0.10f : upsetChance;
+        upsetChance = (diff <= 4) ? 0.25f : upsetChance;
+        upsetChance = (diff <= 2) ? 0.50f : upsetChance;
+        upsetChance = (fit1 <= eliteFit || diff == 0) ? 0.0f : upsetChance;
 
-        if (((float)rand() / RAND_MAX) < upsetChance) {
-            deleted[best] = 1;
-        } else {
-            deleted[worst] = 1;
-        }
+        int target = (curand_uniform(state) < upsetChance) ? best : worst;
+
+        killConfirmed = (atomicCAS(&deleted[target], 0, 1) == 0);
     }
 }
 
-void doCrossover(Individual island[], int deleted[]) {
-    for (int i = 0; i < ISLAND_POP_SIZE; i++) {
-        if (deleted[i]) {
-            int p1 = rand() % ISLAND_POP_SIZE;
-            while (deleted[p1]) {
-                p1 = rand() % ISLAND_POP_SIZE;
-            }
-
-            int p2 = rand() % ISLAND_POP_SIZE;
-            while (p1 == p2 || deleted[p2]) {
-                p2 = rand() % ISLAND_POP_SIZE;
-            }
-
-            for (int j = 0; j < 81; j++) {
-                if (rand() % 2 == 0) {
-                    island[i].cromossome[j] = island[p1].cromossome[j];
-                } else {
-                    island[i].cromossome[j] = island[p2].cromossome[j];
-                }
-            }
-        }
-    }
+__global__ void setupRandomKernel(curandState* state, unsigned long seed) {
+    int id = threadIdx.x + blockIdx.x * blockDim.x;
+    curand_init(seed, id, 0, &state[id]);
 }
 
-void doCrossoverNoLines(Individual island[], int deleted[]) {
-    for (int i = 0; i < ISLAND_POP_SIZE; i++) {
-        if (deleted[i]) {
-            int p1 = rand() % ISLAND_POP_SIZE;
-            while (deleted[p1]) {
-                p1 = rand() % ISLAND_POP_SIZE;
-            }
+__global__ void geneticKernel(int* d_chromosomes, int* d_fitness, int* cluesMask, int* noImprovementIsland, int* bestHistoryIsland, curandState* state, int generation, int* d_mailbox, int* mailboxFull, int* d_generationalBest, int* d_stopFlag) {
+                                       
+    int islandId = blockIdx.x;  
+    int threadId = threadIdx.x; 
+    int globalId = threadId + blockIdx.x * blockDim.x;
 
-            int p2 = rand() % ISLAND_POP_SIZE;
-            while (p1 == p2 || deleted[p2]) {
-                p2 = rand() % ISLAND_POP_SIZE;
-            }
+    int mistakes = 0;
+    
+    //Calculo de fitness
+    #pragma unroll
+    for(int sector = 0; sector < 9; sector++) {
+        unsigned int colMask = 0;
+        unsigned int boxMask = 0;
 
-            for (int j = 0; j < 9; j++) {
-                if (rand() % 2 == 0) {
-                    for (int k = 0; k < 9; k++) {
-                        island[i].cromossome[j*9 + k] = island[p1].cromossome[j*9 + k];
-                    }
-                } else {
-                    for (int k = 0; k < 9; k++) {
-                        island[i].cromossome[j*9 + k] = island[p2].cromossome[j*9 + k];
-                    }
-                }
-            }
-        }
-    }
-}
+        int boxRow = (sector / 3) * 3;
+        int boxCol = (sector % 3) * 3;
 
-void doMutation(Individual island[], int cluesMask[], int deleted[], int noImprovement) {
-    float mutationChance = MUTATION_RATE + (MUTATION_GROWTH * noImprovement);
-    if (mutationChance > MUTATION_THRESHOLD) mutationChance = MUTATION_THRESHOLD;
-
-    for (int i = 0; i < ISLAND_POP_SIZE; i++) {
-        if(deleted[i]) {
-            for (int j = 0; j < 81; j++) {
-                if (cluesMask[j] == 0 && ((float)rand() / RAND_MAX) < mutationChance) {
-                    island[i].cromossome[j] = (rand() % 9) + 1;
-                }
-            }
-        }
-    }
-}
-
-void doMutationNoLines(Individual island[], int cluesMask[], int deleted[], int noImprovement) {
-    float mutationChance = MUTATION_RATE + (MUTATION_GROWTH * noImprovement);
-    if (mutationChance > MUTATION_THRESHOLD) mutationChance = MUTATION_THRESHOLD;
-
-    for (int i = 0; i < ISLAND_POP_SIZE; i++) {
-        if(deleted[i]) {
-            for (int j = 0; j < 9; j++) {
-                if (((float)rand() / RAND_MAX) < mutationChance) {
-
-                    int freeCells[9];
-                    int freeCount = 0; 
-
-                    for(int col = 0; col < 9; col++) {
-                        if(cluesMask[j * 9 + col] == 0) {
-                            freeCells[freeCount] = col;
-                            freeCount++;
-                        }
-                    }
-
-                    if (freeCount >= 2) {
-                        int idx1 = rand() % freeCount; 
-                        int idx2 = rand() % freeCount;
-                        while(idx1 == idx2) {
-                            idx2 = rand() % freeCount;
-                        }
-                        
-                        int c1 = freeCells[idx1];
-                        int c2 = freeCells[idx2];
-                        
-                        int tmp = island[i].cromossome[j * 9 + c1];
-                        island[i].cromossome[j * 9 + c1] = island[i].cromossome[j * 9 + c2];
-                        island[i].cromossome[j * 9 + c2] = tmp;
-                    }
-                }
-            }
-        }
-    }
-}
-
-void doMutationV2(Individual island[], int cluesMask[], int deleted[], int noImprovement) {
-    float mutationChance = MUTATION_RATE + (MUTATION_GROWTH * noImprovement);
-    if (mutationChance > MUTATION_THRESHOLD) mutationChance = MUTATION_THRESHOLD;
-
-    for (int i = 0; i < ISLAND_POP_SIZE; i++) {
-        if(deleted[i]) {
-            for (int row = 0; row < 9; row++) {
-                
-                if (((float)rand() / RAND_MAX) < mutationChance) {
-                    
-                    int errorCells[9];
-                    int errorCount = 0;
-                    
-                    int perfectCells[9];
-                    int perfectCount = 0;
-
-                    for(int col = 0; col < 9; col++) {
-                        if(cluesMask[row * 9 + col] == 0) {
-                            int val = island[i].cromossome[row * 9 + col];
-                            int hasError = 0;
-
-                            for (int r = 0; r < 9; r++) {
-                                if (r != row && island[i].cromossome[r * 9 + col] == val) {
-                                    hasError = 1;
-                                    break;
-                                }
-                            }
-
-                            if (!hasError) {
-                                int startRow = (row / 3) * 3;
-                                int startCol = (col / 3) * 3;
-                                for (int r = 0; r < 3; r++) {
-                                    for (int c = 0; c < 3; c++) {
-                                        int actualRow = startRow + r;
-                                        int actualCol = startCol + c;
-                                        if (actualRow != row && actualCol != col && 
-                                            island[i].cromossome[actualRow * 9 + actualCol] == val) {
-                                            hasError = 1; r = 3; break;
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (hasError) {
-                                errorCells[errorCount++] = col;
-                            } else {
-                                perfectCells[perfectCount++] = col;
-                            }
-                        }
-                    }
-
-                    if (errorCount > 0) {
-                        int c1 = errorCells[rand() % errorCount];
-                        int c2;
-
-                        if (errorCount > 1 && ((float)rand() / RAND_MAX) < 0.70) {
-                            c2 = errorCells[rand() % errorCount];
-                            while(c1 == c2) {
-                                c2 = errorCells[rand() % errorCount];
-                            }
-                        } 
-                        else if (perfectCount > 0) {
-                            c2 = perfectCells[rand() % perfectCount];
-                        } 
-                        else {
-                            continue;
-                        }
-
-                        int tmp = island[i].cromossome[row * 9 + c1];
-                        island[i].cromossome[row * 9 + c1] = island[i].cromossome[row * 9 + c2];
-                        island[i].cromossome[row * 9 + c2] = tmp;
-
-                    } 
-                    else if (perfectCount >= 2 && noImprovement > 200) {
-                        int c1 = perfectCells[rand() % perfectCount];
-                        int c2 = perfectCells[rand() % perfectCount];
-                        while(c1 == c2) c2 = perfectCells[rand() % perfectCount];
-                        
-                        int tmp = island[i].cromossome[row * 9 + c1];
-                        island[i].cromossome[row * 9 + c1] = island[i].cromossome[row * 9 + c2];
-                        island[i].cromossome[row * 9 + c2] = tmp;
-                    }
-                }
-            }
-        }
-    }
-}
-
-void doMigration(Individual (*population)[ISLAND_POP_SIZE]) {
-    Individual bestIndividuals[ISLANDS][MIGRATION_SIZE];
-    int worstIndividuals[ISLANDS][MIGRATION_SIZE];
-
-    for (int i = 0; i < ISLANDS; i++) {
-        for (int m = 0; m < MIGRATION_SIZE; m++) {
+        for (int idx = 0; idx < 9; idx++) {
+            int valCol = d_chromosomes[(idx * 9 + sector) * POP_SIZE + globalId];
+            int valBox = d_chromosomes[((boxRow + idx / 3) * 9 + (boxCol + idx % 3)) * POP_SIZE + globalId];
             
-            int fighterA = rand() % ISLAND_POP_SIZE;
-            int fighterB = rand() % ISLAND_POP_SIZE;
-            int fighterC = rand() % ISLAND_POP_SIZE;
-
-            int bIdx = fighterA;
-            if (population[i][fighterB].fitness < population[i][bIdx].fitness) {
-                bIdx = fighterB;
-            }
-            if (population[i][fighterC].fitness < population[i][bIdx].fitness) {
-                bIdx = fighterC;
+            if (colMask & (1 << valCol)) {
+                mistakes++;
+            } else {
+                colMask |= (1 << valCol);
             }
 
-            bestIndividuals[i][m] = population[i][bIdx];
-
-            int loserA = rand() % ISLAND_POP_SIZE;
-            int loserB = rand() % ISLAND_POP_SIZE;
-            int loserC = rand() % ISLAND_POP_SIZE;
-
-            int wIdx = loserA;
-            if (population[i][loserB].fitness > population[i][wIdx].fitness) {
-                wIdx = loserB;
+            if (boxMask & (1 << valBox)) {
+                mistakes++;
+            } else {
+                boxMask |= (1 << valBox);
             }
-            if (population[i][loserC].fitness > population[i][wIdx].fitness) {
-                wIdx = loserC;
-            }
-
-            worstIndividuals[i][m] = wIdx;
         }
     }
 
-    // Efetua a transferencia em anel para a proxima ilha
-    for (int i = 0; i < ISLANDS; i++) {
-        int nextIsland = (i + 1) % ISLANDS;
-        for (int m = 0; m < MIGRATION_SIZE; m++) {
-            population[nextIsland][worstIndividuals[nextIsland][m]] = bestIndividuals[i][m];
+    d_fitness[globalId] = mistakes;
+
+    //Warp shuffle para determinar melhor fitness da ilha
+    int warpId = threadIdx.x / 32; 
+    int laneId = threadIdx.x % 32; 
+
+    int myBest = warpReduceMin(mistakes);
+
+    __shared__ int warpMins[16];
+    __shared__ int deleted[ISLAND_POP_SIZE];
+    __shared__ int sharedEliteFit;
+    
+    deleted[threadId] = 0; 
+
+    if (laneId == 0) warpMins[warpId] = myBest;
+    
+    __syncthreads(); 
+
+    if (warpId == 0) {
+        int val = (laneId < 16) ? warpMins[laneId] : 999;
+        int localBest = warpReduceMin(val);
+
+        if (laneId == 0) {
+            sharedEliteFit = localBest;
+
+            atomicMin(d_generationalBest, localBest);
+            if (localBest == 0) {
+                atomicExch(d_stopFlag, 1);
+            }
+            if (localBest < bestHistoryIsland[islandId]) {
+                bestHistoryIsland[islandId] = localBest;
+                noImprovementIsland[islandId] = 0;
+            } else {
+                noImprovementIsland[islandId]++;
+            }
+
+            doMigrationCuda(d_chromosomes, d_fitness, islandId, globalId, generation, state, d_mailbox, mailboxFull);
         }
+    }
+    
+    __syncthreads(); 
+
+    if (*d_stopFlag == 1) return;
+
+    if (threadId < TOURNAMENT_SIZE) {
+        curandState* localState = &state[globalId];
+        doTournamentCuda(d_fitness, islandId, globalId, deleted, localState, sharedEliteFit);
+    }
+    
+    __syncthreads();
+
+    if (deleted[threadId]) {
+        curandState* localState = &state[globalId];
+        doCrossoverCuda(d_chromosomes, globalId, islandId, deleted, localState);
+        doMutationCuda(d_chromosomes, globalId, islandId, cluesMask, noImprovementIsland[islandId], localState);
     }
 }
 
-void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int problemLine) {
-    Individual (*population)[ISLAND_POP_SIZE] = (Individual (*)[ISLAND_POP_SIZE])malloc(ISLANDS * sizeof(*population));
-
-    if (population == NULL) {
-        printf("Falha ao alocar populacao\n");
+//Funcao da CPU. Inicia populacoes e aloca memorias de variaveis
+void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int problemLine, int runId) {
+    
+    int *h_chromosomes = (int*)malloc(POP_SIZE * 81 * sizeof(int));
+    int *h_fitness = (int*)malloc(POP_SIZE * sizeof(int));
+    
+    if (h_chromosomes == NULL || h_fitness == NULL) {
+        printf("Erro ao alocar memoria para a populacao\n");
         exit(1);
     }
 
-    int globalBest = 999;
-    int noImprovement = 0;
+    for (int globalId = 0; globalId < POP_SIZE; globalId++) {
+        h_fitness[globalId] = 0; 
+        for (int row = 0; row < 9; row++) {
+            int available[9];       
+            int availableCount = 0;
+            int used[10] = {0};
+            
+            for (int col = 0; col < 9; col++) {
+                int index = row * 9 + col;
+                if (cluesMask[index] == 1) {
+                    h_chromosomes[index * POP_SIZE + globalId] = tabuleiro[index];
+                    used[tabuleiro[index]] = 1;
+                }
+            }
+            
+            for (int num = 1; num <= 9; num++) {
+                if (!used[num]) available[availableCount++] = num;
+            }
+            
+            for (int k = availableCount - 1; k > 0; k--) {
+                int r = rand() % (k + 1);
+                int temp = available[k];
+                available[k] = available[r];
+                available[r] = temp;
+            }
+            
+            int fillIdx = 0;
+            for (int col = 0; col < 9; col++) {
+                int index = row * 9 + col;
+                if (cluesMask[index] == 0) {
+                    h_chromosomes[index * POP_SIZE + globalId] = available[fillIdx++];
+                }
+            }
+        }
+    }
+
+    //Aloca memoria na gpu para cromossomo e fitness
+    int *d_chromosomes, *d_fitness;
+    cudaMalloc(&d_chromosomes, POP_SIZE * 81 * sizeof(int));
+    cudaMalloc(&d_fitness, POP_SIZE * sizeof(int));
+    
+    cudaMemcpy(d_chromosomes, h_chromosomes, POP_SIZE * 81 * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_fitness, h_fitness, POP_SIZE * sizeof(int), cudaMemcpyHostToDevice);
+    
+    //Aloca memoria na gpu para mascara de dicas
+    int *d_cluesMask;
+    cudaMalloc(&d_cluesMask, 81 * sizeof(int));
+    cudaMemcpy(d_cluesMask, cluesMask, 81 * sizeof(int), cudaMemcpyHostToDevice);
+
+    int noImprovementIsland[ISLANDS] = {0};
+    int bestHistoryIsland[ISLANDS];
+
+    for(int i = 0; i < ISLANDS; i++) {
+        bestHistoryIsland[i] = 999;
+    }
+
+    //Aloca memoria na gpu para variaveis de nao-melhora
+    int *d_noImprovementIsland, *d_bestHistoryIsland;
+    cudaMalloc(&d_noImprovementIsland, ISLANDS * sizeof(int));
+    cudaMalloc(&d_bestHistoryIsland, ISLANDS * sizeof(int));
+    cudaMemcpy(d_noImprovementIsland, noImprovementIsland, ISLANDS * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_bestHistoryIsland, bestHistoryIsland, ISLANDS * sizeof(int), cudaMemcpyHostToDevice);
+
+    //Aloca memoria na gpu para os estados de aleatoriedade
+    curandState *d_state;
+    cudaMalloc(&d_state, POP_SIZE * sizeof(curandState));
+
+    //Aloca memoria para as mailboxes
+    int *d_mailbox, *d_mailboxFull;
+    cudaMalloc(&d_mailbox, ISLANDS * MIGRATION_SIZE * 81 * sizeof(int));
+    cudaMalloc(&d_mailboxFull, ISLANDS * sizeof(int));
+    cudaMemset(d_mailboxFull, 0, ISLANDS * sizeof(int));
+
+    //Aloca memoria para controladores
+    int *d_generationalBest, *d_stopFlag;
+    cudaMalloc(&d_generationalBest, sizeof(int));
+    cudaMalloc(&d_stopFlag, sizeof(int));
+    int zero = 0;
+    cudaMemcpy(d_stopFlag, &zero, sizeof(int), cudaMemcpyHostToDevice);
+
+    //Inicia os estados de aleatoriedade
+    setupRandomKernel<<<ISLANDS, ISLAND_POP_SIZE>>>(d_state, time(NULL));
+    cudaDeviceSynchronize();
 
     char filename[128];
-    
-    sprintf(filename, "Graphs/problem_%d/fitness_log_linha_%d.csv", problemLine, problemLine);
-    
+    sprintf(filename, "Graphs/problem_%d_run_%d/fitness_log_linha_%d.csv", problemLine, runId, problemLine);
     FILE *logFile = fopen(filename, "w");
-    if (logFile) {
-        fprintf(logFile, "Geracao,MelhorGlobal,MelhorGeracao\n");
-    }
+    if (logFile) fprintf(logFile, "Geracao,MelhorGlobal,MelhorGeracao\n");
 
-    Individual bestSolution;
-    bestSolution.fitness = 999;
-
-    int islandsBest[ISLANDS];
-    for (int i = 0; i < ISLANDS; i++) {
-        islandsBest[i] = 999;
-    }
+    int globalBest = 999;
+    int bestSolution[81] = {0};
     
-    int noImprovementIsland[ISLANDS] = {0};
-
-    //Gera populacao inicial aleatoria
-    /*
-    for (int i = 0; i < ISLANDS; i++) {
-        //printf("Ilha %d\n", i);
-        //printf("\n");
-
-        for (int j = 0; j < ISLAND_POP_SIZE; j++) {
-            population[i][j].fitness = 0.0f;
-            
-            for (int k = 0; k < 81; k++) {
-                if (cluesMask[k] == 1) {
-                    population[i][j].cromossome[k] = tabuleiro[k];
-                } else {
-                    population[i][j].cromossome[k] = rand() % 9 + 1;
-                }
-            }
-        }
-    }
-    */
-
-    //Gera populacao inicial aleatoria, porem sem repetir numeros nas linhas
-    for (int i = 0; i < ISLANDS; i++) {
-        for (int j = 0; j < ISLAND_POP_SIZE; j++) {
-            population[i][j].fitness = 0;
-            for (int row = 0; row < 9; row++) {
-                int available[9];       
-                int availableCount = 0;
-                int used[10] = {0};
-                for (int col = 0; col < 9; col++) {
-                    int index = row * 9 + col;
-                    if (cluesMask[index] == 1) {
-                        population[i][j].cromossome[index] = tabuleiro[index];
-                        used[tabuleiro[index]] = 1;
-                    }
-                }
-                for (int num = 1; num <= 9; num++) {
-                    if (!used[num]) {
-                        available[availableCount++] = num;
-                    }
-                }
-                for (int k = availableCount - 1; k > 0; k--) {
-                    int r = rand() % (k + 1);
-                    int temp = available[k];
-                    available[k] = available[r];
-                    available[r] = temp;
-                }
-                int fillIdx = 0;
-                for (int col = 0; col < 9; col++) {
-                    int index = row * 9 + col;
-                    if (cluesMask[index] == 0) {
-                        population[i][j].cromossome[index] = available[fillIdx++];
-                    }
-                }
-            }
-        }
-    }
-
-    Individual (*d_population)[ISLAND_POP_SIZE];
-    cudaMalloc(&d_population, ISLANDS * sizeof(*population));
-    cudaMemcpy(d_population, population, ISLANDS * sizeof(*population), cudaMemcpyHostToDevice);
-
-    clock_t start_time = clock();
-
+    double start_time = clock();
     int lastGen = 0;
 
     for (int generation = 0; generation < MAX_GENERATIONS; generation++) {
         lastGen++;
-        int generationalBest = 999;
-        int hasElite[ISLANDS] = {0};
-        Individual islandElites[ISLANDS];
-
-        cudaMemcpy(d_population, population, ISLANDS * sizeof(*population), cudaMemcpyHostToDevice);
-        calculateFitnessKernel<<<ISLANDS, ISLAND_POP_SIZE>>>(d_population);
-        cudaDeviceSynchronize();
-        cudaMemcpy(population, d_population, ISLANDS * sizeof(*population), cudaMemcpyDeviceToHost);
-
-        //Calcula o fitness da populacao de cada ilha
-        for (int i = 0; i < ISLANDS; i++) {
-            int bestIdx = -1;
-            int bestFitness = 999;
-            for (int j = 0; j < ISLAND_POP_SIZE; j++) {
-                if(population[i][j].fitness < bestFitness){
-                    bestFitness = population[i][j].fitness;
-                    bestIdx = j;
-                }
-            }
-            
-            // Atualiza os recordes globais e geracionais
-            if (bestFitness < generationalBest) generationalBest = bestFitness;
-
-            if (bestFitness < bestSolution.fitness) {
-                bestSolution = population[i][bestIdx];
-            }
-            
-            //Verifica se ha um individuo na ilha que eh melhor que todos os outros, se sim, protege ele
-            int bestCount = 0;
-            for (int j = 0; j < ISLAND_POP_SIZE; j++) {
-                if (population[i][j].fitness == bestFitness) {
-                    bestCount++;
-                }
-            }
-
-            if (bestCount == 1) {
-                hasElite[i] = 1;
-                islandElites[i] = population[i][bestIdx];
-            } else {
-                hasElite[i] = 0;
-            }
-            
-            if (bestFitness < islandsBest[i]) {
-                islandsBest[i] = bestFitness;
-                noImprovementIsland[i] = 0;
-            } else {
-                noImprovementIsland[i]++;
-            }
-        }
-
-        //Imprime ha quantas geracoes nao ha melhora global
-        if (generationalBest < globalBest) {
-            globalBest = generationalBest;
-            noImprovement = 0;
-        } else {
-            noImprovement++;
-        }
-
-        if (logFile) {
-            fprintf(logFile, "%d,%d,%d\n", generation, globalBest, generationalBest);
-        }
-
-        //Solucao encontrada
-        if (globalBest == 0) {
-            /*
-            clock_t end_time = clock();
-            double time_spent = (double) (end_time - start_time) / CLOCKS_PER_SEC;
-
-            int hours = (int)(time_spent / 3600);
-            int minutes = ((int)time_spent % 3600) / 60;
-            double seconds = time_spent - (hours * 3600) - (minutes * 60);
-
-            printf("\n==================================================\n");
-            printf("SOLUCAO ENCONTRADA NA GERACAO %d!\n", generation);
-            printf("Tempo de execucao: %02d horas, %02d minutos e %.2f segundos\n", hours, minutes, seconds);
-            printf("==================================================\n");
-            
-            for (int i = 0; i < ISLANDS; i++) {
-                for (int j = 0; j < ISLAND_POP_SIZE; j++) {
-                    if (population[i][j].fitness == 0) {
-                        printIndividual(population[i][j]);
-                        if (logFile) fclose(logFile);
-                        return;
-                    }
-                }
-            }
-            */
-            break;
-        }
-
-        if (!silentMode && generation % 10 == 0) {
-            printReport(population, generation, noImprovementIsland, globalBest);
-        }
-
-        //Realiza migracao apos X geracoes
-        if (generation > 0 && generation % MIGRATION_FREQUENCY == 0) {
-            doMigration(population);
-        }
         
-        for (int i = 0; i < ISLANDS; i++) {
-            int deleted[ISLAND_POP_SIZE] = {0};
+        int h_generationalBest = 999;
 
-            int eliteFit = hasElite[i] ? islandElites[i].fitness : -1;
+        cudaMemcpy(d_generationalBest, &h_generationalBest, sizeof(int), cudaMemcpyHostToDevice);
+        
+        geneticKernel<<<ISLANDS, ISLAND_POP_SIZE>>>(d_chromosomes, d_fitness, d_cluesMask, d_noImprovementIsland, d_bestHistoryIsland, d_state, generation, d_mailbox, d_mailboxFull, d_generationalBest, d_stopFlag);
+        
+        int h_stopFlag;
+        cudaMemcpy(&h_generationalBest, d_generationalBest, sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy(&h_stopFlag, d_stopFlag, sizeof(int), cudaMemcpyDeviceToHost);
 
-            doTournamentV2(population[i], deleted, eliteFit);
-            //printDeleted(deleted);
-
-            doCrossoverNoLines(population[i], deleted);
-
-            doMutationV2(population[i], cluesMask, deleted, noImprovementIsland[i]);
+        if (h_generationalBest < globalBest) {
+            globalBest = h_generationalBest;
         }
 
-        //printPopulation(population);
+        if (logFile) fprintf(logFile, "%d,%d,%d\n", generation, globalBest, h_generationalBest);
+
+        if (h_stopFlag == 1 || globalBest == 0) {
+            cudaMemcpy(h_chromosomes, d_chromosomes, POP_SIZE * 81 * sizeof(int), cudaMemcpyDeviceToHost);
+            cudaMemcpy(h_fitness, d_fitness, POP_SIZE * sizeof(int), cudaMemcpyDeviceToHost);
+            
+            for (int i = 0; i < POP_SIZE; i++) {
+                if (h_fitness[i] == 0) {
+                    for (int j = 0; j < 81; j++) bestSolution[j] = h_chromosomes[j * POP_SIZE + i];
+                    break;
+                }
+            }
+            break; 
+        }
     }
-    clock_t end_time = clock();
-    double time_spent = (double)(end_time - start_time) / CLOCKS_PER_SEC;
-
-    int hours = (int)(time_spent / 3600);
-    int minutes = ((int)time_spent % 3600) / 60;
-    double seconds = time_spent - (hours * 3600) - (minutes * 60);
-
+    
+    double time_spent = (double)(clock() - start_time) / CLOCKS_PER_SEC;
     if (logFile) fclose(logFile);
 
     char reportName[128];
-    sprintf(reportName, "Graphs/problem_%d/relatorio_execucao.txt", problemLine);
+    sprintf(reportName, "Graphs/problem_%d_run_%d/relatorio_execucao.txt", problemLine, runId);
     FILE *reportFile = fopen(reportName, "w");
-    
     if (reportFile) {
         fprintf(reportFile, "==================================================\n");
-        fprintf(reportFile, " RELATORIO TÉCNICO - SUDOKU LINHA %d\n", problemLine);
+        fprintf(reportFile, " RELATORIO TECNICO CUDA V6 (100%% Paralelo) - LINHA %d\n", problemLine);
         fprintf(reportFile, "==================================================\n");
-        
-        fprintf(reportFile, " HIPERPARAMETROS:\n");
         fprintf(reportFile, " Pop. Total: %d | Ilhas: %d | Max Gen: %d\n", POP_SIZE, ISLANDS, MAX_GENERATIONS);
         fprintf(reportFile, " Mutacao Base: %.3f | Freq. Migracao: %d\n", MUTATION_RATE, MIGRATION_FREQUENCY);
         fprintf(reportFile, "==================================================\n");
         
-        if (globalBest == 0) {
-            fprintf(reportFile, "STATUS: RESOLVIDO COM SUCESSO!\n");
-        } else {
-            fprintf(reportFile, "STATUS: LIMITE DE GERACOES ATINGIDO (ESTAGNADO)\n");
-        }
+        if (globalBest == 0) fprintf(reportFile, "STATUS: RESOLVIDO COM SUCESSO!\n");
+        else fprintf(reportFile, "STATUS: LIMITE DE GERACOES ATINGIDO (ESTAGNADO)\n");
         
         fprintf(reportFile, "Fitness Final (Erros): %d\n", globalBest);
         fprintf(reportFile, "Geracoes Executadas: %d / %d\n", lastGen, MAX_GENERATIONS);
         fprintf(reportFile, "Tempo Total de CPU: %.3f segundos\n", time_spent);
         fprintf(reportFile, "==================================================\n");
-        fprintf(reportFile, "TABULEIRO FINAL DA MELHOR SOLUCAO:\n");
-        
         for (int i = 0; i < 81; i++) {
-            fprintf(reportFile, "%d ", bestSolution.cromossome[i]);
+            fprintf(reportFile, "%d ", bestSolution[i]);
             if ((i + 1) % 9 == 0) fprintf(reportFile, "\n");
         }
         fclose(reportFile);
     }
 
-    if(!silentMode) {
-        printf("Melhor fitness encontrado: %d.\n", globalBest);
-        printf("Nenhuma solucao encontrada apos %d geracoes.\n", MAX_GENERATIONS);
-        printf("Tempo total de processamento: %.2f segundos\n", time_spent);
-        printf("Tempo total de processamento: %02d horas, %02d minutos e %.2f segundos\n", hours, minutes, seconds);
+    if (!silentMode) printf("Melhor fitness: %d. Tempo: %.2f seg\n", globalBest, time_spent);
 
-        printf("\n==================================================\n");
-        printf("MELHOR SOLUCAO ENCONTRADA (%d erros):\n", bestSolution.fitness);
-        printHighlightedSolution(bestSolution);
-        printf("==================================================\n");
+    cudaFree(d_chromosomes);
+    cudaFree(d_fitness);
+    cudaFree(d_cluesMask);
+    cudaFree(d_noImprovementIsland);
+    cudaFree(d_bestHistoryIsland);
+    cudaFree(d_state);
+    cudaFree(d_mailbox);
+    cudaFree(d_mailboxFull);
+    cudaFree(d_generationalBest);
+    cudaFree(d_stopFlag);
+    free(h_chromosomes);
+    free(h_fitness);
+}
+
+void getTabuleiro(const char* str_tab, int tabuleiro[81]) {
+    for (int i = 0; i < 81; i++) {
+        if (str_tab[i] == '.') tabuleiro[i] = 0;
+        else tabuleiro[i] = str_tab[i] - '0';
     }
-
-    cudaFree(d_population);
-    free(population);
 }
 
 int main(int argc, char* argv[]) {
     FILE* file = fopen("../../data/sudoku-3m.csv", "r");
     
-    if(!file) {
-        file = fopen("../data/sudoku-3m.csv", "r");
-    }
+    if(!file) file = fopen("../data/sudoku-3m.csv", "r");
+    if(!file) file = fopen("data/sudoku-3m.csv", "r");
     
-    if(!file) {
-        file = fopen("data/sudoku-3m.csv", "r");
-    }
-
     if(!file) {
         printf("Falha ao abrir o arquivo\n");
         return 1;
@@ -853,8 +612,11 @@ int main(int argc, char* argv[]) {
         problemLine = (rand() % 3000000) + 1;
     }
 
-    if (argc > 2) {
-        silentMode = atoi(argv[2]);
+    if (argc > 2) silentMode = atoi(argv[2]);
+
+    int runId = 1;
+    if (argc > 3) {
+        runId = atoi(argv[3]);
     }
 
     int currentLine = 0;
@@ -876,26 +638,19 @@ int main(int argc, char* argv[]) {
             char* str_difficulty = strtok(NULL, "\n");
 
             Sudoku sudoku;
-
             sudoku.id = atoi(str_id);
             getTabuleiro(str_puzzle, sudoku.puzzle);
             getTabuleiro(str_solution, sudoku.solution);
             sudoku.clues = atoi(str_clues);
             sudoku.difficulty = atof(str_difficulty);
 
-            //printSudoku(sudoku);
-
             int cluesMask[81] = {0};
             for (int i = 0; i < 81; i++) {
-                if (sudoku.puzzle[i] != 0) {
-                    cluesMask[i] = 1;
-                }
+                if (sudoku.puzzle[i] != 0) cluesMask[i] = 1;
             }
 
-            //printCluesMask(cluesMask);
-
-            printf("Iniciando algoritmo genetico\n");
-            geneticAlgorithm(sudoku.puzzle, cluesMask, silentMode, problemLine);
+            printf("Iniciando algoritmo genetico CUDA\n");
+            geneticAlgorithm(sudoku.puzzle, cluesMask, silentMode, problemLine, runId);
         }
     }
 

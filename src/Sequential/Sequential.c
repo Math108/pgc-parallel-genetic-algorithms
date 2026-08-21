@@ -4,8 +4,8 @@
 #include <time.h>
 
 #define MAX_GENERATIONS 2000
-#define POP_SIZE 24000
-#define ISLANDS 12
+#define POP_SIZE 192000
+#define ISLANDS 384
 #define ISLAND_POP_SIZE (POP_SIZE / ISLANDS)
 
 #define TOURNAMENT_SIZE (int)(ISLAND_POP_SIZE * 0.20)
@@ -15,7 +15,7 @@
 #define MUTATION_THRESHOLD 0.150
 
 #define MIGRATION_FREQUENCY 50
-#define MIGRATION_SIZE (int)(ISLAND_POP_SIZE * 0.05)
+#define MIGRATION_SIZE (int)(ISLAND_POP_SIZE * 0.02)
 
 typedef struct {
     int id;
@@ -567,7 +567,7 @@ void doMigration(Individual (*population)[ISLAND_POP_SIZE]) {
     }
 }
 
-void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int problemLine) {
+void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int problemLine, int runId) {
     Individual (*population)[ISLAND_POP_SIZE] = malloc(ISLANDS * sizeof(*population));
 
     if (population == NULL) {
@@ -580,7 +580,7 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
 
     char filename[128];
     
-    sprintf(filename, "Graphs/problem_%d/fitness_log_linha_%d.csv", problemLine, problemLine);
+    sprintf(filename, "Graphs/problem_%d_run_%d/fitness_log_linha_%d.csv", problemLine, runId, problemLine);
     
     FILE *logFile = fopen(filename, "w");
     if (logFile) {
@@ -773,7 +773,7 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
     if (logFile) fclose(logFile);
 
     char reportName[128];
-    sprintf(reportName, "Graphs/problem_%d/relatorio_execucao.txt", problemLine);
+    sprintf(reportName, "Graphs/problem_%d_run_%d/relatorio_execucao.txt", problemLine, runId);
     FILE *reportFile = fopen(reportName, "w");
     
     if (reportFile) {
@@ -851,6 +851,12 @@ int main(int argc, char* argv[]) {
         silentMode = atoi(argv[2]);
     }
 
+    int runId = 1;
+    if (argc > 3) {
+        runId = atoi(argv[3]);
+    }
+
+
     int currentLine = 0;
     srand(time(NULL));
 
@@ -889,7 +895,7 @@ int main(int argc, char* argv[]) {
             //printCluesMask(cluesMask);
 
             printf("Iniciando algoritmo genetico\n");
-            geneticAlgorithm(sudoku.puzzle, cluesMask, silentMode, problemLine);
+            geneticAlgorithm(sudoku.puzzle, cluesMask, silentMode, problemLine, runId);
         }
     }
 

@@ -75,7 +75,7 @@ with open(report_path, 'w', encoding='utf-8') as f:
     f.write("--------------------------------------------------\n")
     f.write(f"{hiperparametros_str}\n")
     f.write("==================================================\n")
-    f.write(f"Total de Problemas Processados: {total_problemas}\n")
+    f.write(f"Total de Sudokus Processados:   {total_problemas}\n")
     f.write(f"Solucoes Encontradas (0 Erros): {sucessos} ({taxa_sucesso:.1f}%)\n")
     f.write(f"Falhas (Estagnacao no Limite):  {falhas}\n")
     f.write("--------------------------------------------------\n")
@@ -85,7 +85,7 @@ with open(report_path, 'w', encoding='utf-8') as f:
     f.write(f"Tempo Medio por Sudoku:         {media_tempo:.3f} segundos\n")
     f.write(f"Tempo do Mais Rapido:           {tempo_min:.3f} segundos\n")
     f.write(f"Tempo do Mais Lento:            {tempo_max:.3f} segundos\n")
-    f.write(f"TEMPO TOTAL DE EXECUCAO (GPU):  {soma_tempo_total:.3f} segundos\n")
+    f.write(f"TEMPO TOTAL (CUDA):             {soma_tempo_total:.3f} segundos\n")
     f.write("==================================================\n")
 
 image_files = glob.glob("Graphs/problem_*/grafico_*.png")

@@ -5,8 +5,8 @@
 #include <omp.h>
 
 #define MAX_GENERATIONS 2000
-#define POP_SIZE 48000
-#define ISLANDS 96
+#define POP_SIZE 192000
+#define ISLANDS 384
 #define ISLAND_POP_SIZE (POP_SIZE / ISLANDS)
 
 #define TOURNAMENT_SIZE (int)(ISLAND_POP_SIZE * 0.20)
@@ -15,7 +15,7 @@
 #define MUTATION_GROWTH 0.00050
 #define MUTATION_THRESHOLD 0.150
 
-#define MIGRATION_FREQUENCY 50
+#define MIGRATION_FREQUENCY 150
 #define MIGRATION_SIZE (int)(ISLAND_POP_SIZE * 0.02)
 
 typedef struct {
@@ -354,7 +354,7 @@ void getTabuleiro(const char* strTab, int tabuleiro[81]) {
     }
 }
 
-void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int problemLine) {
+void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int problemLine, int runId) {
     Individual (*population)[ISLAND_POP_SIZE] = malloc(ISLANDS * sizeof(*population));
     if (!population) {
         printf("Falha ao alocar populacao\n");
@@ -366,7 +366,7 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
     int lastGenGlobal = 0;
     
     char filename[128];
-    sprintf(filename, "Graphs/problem_%d/fitness_log_linha_%d.csv", problemLine, problemLine);
+    sprintf(filename, "Graphs/problem_%d_run_%d/fitness_log_linha_%d.csv", problemLine, runId, problemLine);
     FILE *logFile = fopen(filename, "w");
     if (logFile) fprintf(logFile, "Geracao,MelhorGlobal,MelhorGeracao\n");
 
@@ -565,7 +565,7 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
     if (logFile) fclose(logFile);
 
     char reportName[128];
-    sprintf(reportName, "Graphs/problem_%d/relatorio_execucao.txt", problemLine);
+    sprintf(reportName, "Graphs/problem_%d_run_%d/relatorio_execucao.txt", problemLine, runId);
     FILE *reportFile = fopen(reportName, "w");
     
     if (reportFile) {
@@ -638,6 +638,11 @@ int main(int argc, char* argv[]) {
 
     if (argc > 2) silentMode = atoi(argv[2]);
 
+    int runId = 1;
+    if (argc > 3) {
+        runId = atoi(argv[3]);
+    }
+
     int currentLine = 0;
 
     if (fgets(line, sizeof(line), file) == NULL) {
@@ -667,7 +672,7 @@ int main(int argc, char* argv[]) {
             }
 
             printf("Iniciando algoritmo genetico com OpenMP...\n");
-            geneticAlgorithm(sudoku.puzzle, cluesMask, silentMode, problemLine);
+            geneticAlgorithm(sudoku.puzzle, cluesMask, silentMode, problemLine, runId);
         }
     }
 
