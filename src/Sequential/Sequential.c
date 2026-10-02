@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "../../config.h"
 
+/*
 #define MAX_GENERATIONS 2000
 #define POP_SIZE 192000
 #define ISLANDS 384
@@ -16,6 +18,7 @@
 
 #define MIGRATION_FREQUENCY 50
 #define MIGRATION_SIZE (int)(ISLAND_POP_SIZE * 0.02)
+*/
 
 typedef struct {
     int id;
@@ -700,43 +703,23 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
         }
 
         //Imprime ha quantas geracoes nao ha melhora global
-        if (generationalBest < globalBest) {
-            globalBest = generationalBest;
-            noImprovement = 0;
-        } else {
-            noImprovement++;
-        }
-
-        if (logFile) {
-            fprintf(logFile, "%d,%d,%d\n", generation, globalBest, generationalBest);
-        }
-
-        //Solucao encontrada
-        if (globalBest == 0) {
-            /*
-            clock_t end_time = clock();
-            double time_spent = (double) (end_time - start_time) / CLOCKS_PER_SEC;
-
-            int hours = (int)(time_spent / 3600);
-            int minutes = ((int)time_spent % 3600) / 60;
-            double seconds = time_spent - (hours * 3600) - (minutes * 60);
-
-            printf("\n==================================================\n");
-            printf("SOLUCAO ENCONTRADA NA GERACAO %d!\n", generation);
-            printf("Tempo de execucao: %02d horas, %02d minutos e %.2f segundos\n", hours, minutes, seconds);
-            printf("==================================================\n");
+        if ((generation > 0 && generation % MIGRATION_FREQUENCY == 0) || generation == MAX_GENERATIONS - 1) {
             
-            for (int i = 0; i < ISLANDS; i++) {
-                for (int j = 0; j < ISLAND_POP_SIZE; j++) {
-                    if (population[i][j].fitness == 0) {
-                        printIndividual(population[i][j]);
-                        if (logFile) fclose(logFile);
-                        return;
-                    }
-                }
+            if (generationalBest < globalBest) {
+                globalBest = generationalBest;
+                noImprovement = 0;
+            } else {
+                noImprovement += MIGRATION_FREQUENCY;
             }
-            */
-            break;
+
+            if (logFile) {
+                fprintf(logFile, "%d,%d,%d\n", generation, globalBest, generationalBest);
+            }
+
+            // Solucao encontrada
+            if (globalBest == 0) {
+                break;
+            }
         }
 
         if (!silentMode && generation % 10 == 0) {

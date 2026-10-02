@@ -3,7 +3,9 @@
 #include <string.h>
 #include <time.h>
 #include <omp.h>
+#include "../../config.h"
 
+/*
 #define MAX_GENERATIONS 2000
 #define POP_SIZE 192000
 #define ISLANDS 384
@@ -17,6 +19,7 @@
 
 #define MIGRATION_FREQUENCY 150
 #define MIGRATION_SIZE (int)(ISLAND_POP_SIZE * 0.02)
+*/
 
 typedef struct {
     int id;
@@ -431,7 +434,10 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
             }
         }
 
-        //Calculo do fitness
+        Individual myBestSolution;
+        myBestSolution.fitness = 999;
+
+        //Executa as geracoes
         for (int generation = 0; generation < MAX_GENERATIONS && !stopFlag; generation++) {
             localLastGen = generation;
             
@@ -464,23 +470,27 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
             if (bestFitness < myBestHistory) {
                 myBestHistory = bestFitness;
                 myNoImprovement = 0;
-                
-                #pragma omp critical
-                {
-                    if (bestFitness < globalBest) {
-                        globalBest = bestFitness;
-                        bestSolution = population[myIsland][bestIdx];
-                        if (globalBest == 0) stopFlag = 1;
-                    }
-                }
+                myBestSolution = population[myIsland][bestIdx]; 
             } else {
                 myNoImprovement++;
             }
 
-            if (myIsland == 0 && logFile) {
-                fprintf(logFile, "%d,%d,%d\n", generation, globalBest, bestFitness);
-                fflush(logFile);
+            if ((generation > 0 && generation % MIGRATION_FREQUENCY == 0) || generation == MAX_GENERATIONS - 1) {
+                #pragma omp critical
+                {
+                    if (myBestHistory < globalBest) {
+                        globalBest = myBestHistory;
+                        bestSolution = myBestSolution;
+                        if (globalBest == 0) stopFlag = 1;
+                    }
+                }
+                
+                if (myIsland == 0 && logFile) {
+                    fprintf(logFile, "%d,%d,%d\n", generation, globalBest, bestFitness);
+                    fflush(logFile);
+                }
             }
+            
             if (stopFlag) break;
 
             //Realiza migracao assincrona

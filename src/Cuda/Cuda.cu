@@ -4,6 +4,8 @@
 #include <time.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h> 
+#include "../../config.h"
+/*
 
 #define MAX_GENERATIONS 2000
 #define POP_SIZE 196608
@@ -19,6 +21,7 @@
 
 #define MIGRATION_FREQUENCY 150
 #define MIGRATION_SIZE (int)(ISLAND_POP_SIZE * 0.02)
+*/
 
 typedef struct {
     int id;
@@ -510,33 +513,36 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
     for (int generation = 0; generation < MAX_GENERATIONS; generation++) {
         lastGen++;
         
-        int h_generationalBest = 999;
-
-        cudaMemcpy(d_generationalBest, &h_generationalBest, sizeof(int), cudaMemcpyHostToDevice);
-        
         geneticKernel<<<ISLANDS, ISLAND_POP_SIZE>>>(d_chromosomes, d_fitness, d_cluesMask, d_noImprovementIsland, d_bestHistoryIsland, d_state, generation, d_mailbox, d_mailboxFull, d_generationalBest, d_stopFlag);
         
-        int h_stopFlag;
-        cudaMemcpy(&h_generationalBest, d_generationalBest, sizeof(int), cudaMemcpyDeviceToHost);
-        cudaMemcpy(&h_stopFlag, d_stopFlag, sizeof(int), cudaMemcpyDeviceToHost);
+        if ((generation > 0 && generation % MIGRATION_FREQUENCY == 0) || generation == MAX_GENERATIONS - 1) {
+            int h_generationalBest = 999;
+            int h_stopFlag;
 
-        if (h_generationalBest < globalBest) {
-            globalBest = h_generationalBest;
-        }
+            cudaMemcpy(&h_generationalBest, d_generationalBest, sizeof(int), cudaMemcpyDeviceToHost);
+            cudaMemcpy(&h_stopFlag, d_stopFlag, sizeof(int), cudaMemcpyDeviceToHost);
 
-        if (logFile) fprintf(logFile, "%d,%d,%d\n", generation, globalBest, h_generationalBest);
-
-        if (h_stopFlag == 1 || globalBest == 0) {
-            cudaMemcpy(h_chromosomes, d_chromosomes, POP_SIZE * 81 * sizeof(int), cudaMemcpyDeviceToHost);
-            cudaMemcpy(h_fitness, d_fitness, POP_SIZE * sizeof(int), cudaMemcpyDeviceToHost);
-            
-            for (int i = 0; i < POP_SIZE; i++) {
-                if (h_fitness[i] == 0) {
-                    for (int j = 0; j < 81; j++) bestSolution[j] = h_chromosomes[j * POP_SIZE + i];
-                    break;
-                }
+            if (h_generationalBest < globalBest) {
+                globalBest = h_generationalBest;
             }
-            break; 
+
+            if (logFile) fprintf(logFile, "%d,%d,%d\n", generation, globalBest, h_generationalBest);
+
+            if (h_stopFlag == 1 || globalBest == 0) {
+                cudaMemcpy(h_chromosomes, d_chromosomes, POP_SIZE * 81 * sizeof(int), cudaMemcpyDeviceToHost);
+                cudaMemcpy(h_fitness, d_fitness, POP_SIZE * sizeof(int), cudaMemcpyDeviceToHost);
+                
+                for (int i = 0; i < POP_SIZE; i++) {
+                    if (h_fitness[i] == 0) {
+                        for (int j = 0; j < 81; j++) bestSolution[j] = h_chromosomes[j * POP_SIZE + i];
+                        break;
+                    }
+                }
+                break; 
+            }
+
+            h_generationalBest = 999;
+            cudaMemcpy(d_generationalBest, &h_generationalBest, sizeof(int), cudaMemcpyHostToDevice);
         }
     }
     
