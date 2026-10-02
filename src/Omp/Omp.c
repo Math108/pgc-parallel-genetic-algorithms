@@ -397,7 +397,7 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
     #pragma omp parallel num_threads(ISLANDS)
     {
         int myIsland = omp_get_thread_num();
-        unsigned int seed = time(NULL) ^ myIsland;
+        unsigned int seed = GLOBAL_SEED + problemLine + runId + myIsland;
 
         int myBestHistory = 999;
         int myNoImprovement = 0;
@@ -475,7 +475,7 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
                 myNoImprovement++;
             }
 
-            if ((generation > 0 && generation % MIGRATION_FREQUENCY == 0) || generation == MAX_GENERATIONS - 1) {
+            if ((generation % MIGRATION_FREQUENCY == 0) || generation == MAX_GENERATIONS - 1) {
                 #pragma omp critical
                 {
                     if (myBestHistory < globalBest) {
@@ -642,7 +642,6 @@ int main(int argc, char* argv[]) {
 
     if (argc > 1) problemLine = atoi(argv[1]);
     else {
-        srand(time(NULL));
         problemLine = (rand() % 3000000) + 1;
     }
 
@@ -682,6 +681,8 @@ int main(int argc, char* argv[]) {
             }
 
             printf("Iniciando algoritmo genetico com OpenMP...\n");
+            srand(GLOBAL_SEED + problemLine + runId);
+            
             geneticAlgorithm(sudoku.puzzle, cluesMask, silentMode, problemLine, runId);
         }
     }

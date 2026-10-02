@@ -23,8 +23,8 @@ try:
     data = pd.read_csv(csv_filename)
 
     plt.figure(figsize=(10, 6))
-    plt.plot(data['Geracao'], data['MelhorGlobal'], label='Melhor Global (Elitismo)', color='blue', linewidth=2)
-    plt.plot(data['Geracao'], data['MelhorGeracao'], label='Melhor da Geração', color='orange', alpha=0.5, linestyle=':')
+    plt.plot(data['Geracao'], data['MelhorGlobal'], label='Melhor Global (Elitismo)', color='blue', linewidth=2, marker='o', markersize=6)
+    plt.plot(data['Geracao'], data['MelhorGeracao'], label='Melhor da Geração', color='orange', alpha=0.5, linestyle=':', marker='x', markersize=6)
 
     plt.title(f'Curva de Convergência - Sudoku Linha {problem_id}', fontsize=14, fontweight='bold')
     plt.xlabel('Gerações', fontsize=12)

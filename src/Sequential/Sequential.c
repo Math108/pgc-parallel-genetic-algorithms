@@ -703,7 +703,7 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
         }
 
         //Imprime ha quantas geracoes nao ha melhora global
-        if ((generation > 0 && generation % MIGRATION_FREQUENCY == 0) || generation == MAX_GENERATIONS - 1) {
+        if ((generation % MIGRATION_FREQUENCY == 0) || generation == MAX_GENERATIONS - 1) {
             
             if (generationalBest < globalBest) {
                 globalBest = generationalBest;
@@ -826,7 +826,6 @@ int main(int argc, char* argv[]) {
     if (argc > 1) {
         problemLine = atoi(argv[1]);
     } else {
-        srand(time(NULL));
         problemLine = (rand() % 3000000) + 1;
     }
 
@@ -841,7 +840,6 @@ int main(int argc, char* argv[]) {
 
 
     int currentLine = 0;
-    srand(time(NULL));
 
     if (fgets(line, sizeof(line), file) == NULL) {
         printf("Falha ao ler o CSV\n");
@@ -878,6 +876,8 @@ int main(int argc, char* argv[]) {
             //printCluesMask(cluesMask);
 
             printf("Iniciando algoritmo genetico\n");
+            srand(GLOBAL_SEED + problemLine + runId);
+
             geneticAlgorithm(sudoku.puzzle, cluesMask, silentMode, problemLine, runId);
         }
     }

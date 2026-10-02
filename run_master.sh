@@ -32,12 +32,29 @@ if [ -z "$ESCOLHAS" ]; then
     ESCOLHAS=$(seq 1 ${#ARQUIVOS[@]} | tr '\n' ' ')
 fi
 
-read -p "2. Quantos Sudokus distintos sortear? (X): " X_SUDOKUS
-read -p "3. Quantas repeticoes por Sudoku? (Y): " Y_REPETICOES
+echo "------------------------------------------"
+echo "Escolha o modo de teste:"
+echo "  1) Aleatório (Gerar novas linhas)"
+echo "  2) Comparativo (Linhas fixas, 10 Sudokus, 5 repetições)"
+read -p "Modo (1 ou 2): " MODO_TESTE
 
-SEED_FILE="$ROOT_DIR/data/linhas_de_teste.txt"
-shuf -i 1-3000000 -n $X_SUDOKUS > "$SEED_FILE"
-echo "✅ Arquivo de sementes gerado em: $SEED_FILE"
+if [ "$MODO_TESTE" == "2" ]; then
+    Y_REPETICOES=5
+    SEED_FILE="$ROOT_DIR/data/linhas_de_teste_fixas.txt"
+    
+    if [ ! -f "$SEED_FILE" ]; then
+        echo "❌ Erro: O arquivo $SEED_FILE não existe!"
+        exit 1
+    fi
+    echo "✅ Modo Comparativo ativado. Utilizando arquivo fixo com $Y_REPETICOES repetições."
+else
+    read -p "2. Quantos Sudokus distintos sortear? (X): " X_SUDOKUS
+    read -p "3. Quantas repeticoes por Sudoku? (Y): " Y_REPETICOES
+
+    SEED_FILE="$ROOT_DIR/data/linhas_de_teste.txt"
+    shuf -i 1-3000000 -n $X_SUDOKUS > "$SEED_FILE"
+    echo "✅ Arquivo de sementes gerado em: $SEED_FILE"
+fi
 
 for NUM in $ESCOLHAS; do
     IDX=$((NUM-1))

@@ -495,8 +495,14 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
     int zero = 0;
     cudaMemcpy(d_stopFlag, &zero, sizeof(int), cudaMemcpyHostToDevice);
 
+    int start_best = 999;
+    cudaMemcpy(d_generationalBest, &start_best, sizeof(int), cudaMemcpyHostToDevice);
+
     //Inicia os estados de aleatoriedade
-    setupRandomKernel<<<ISLANDS, ISLAND_POP_SIZE>>>(d_state, time(NULL));
+    unsigned long mySeed = GLOBAL_SEED + problemLine + runId;
+    setupRandomKernel<<<ISLANDS, ISLAND_POP_SIZE>>>(d_state, mySeed);
+    cudaDeviceSynchronize();
+
     cudaDeviceSynchronize();
 
     char filename[128];
@@ -515,7 +521,7 @@ void geneticAlgorithm(int tabuleiro[81], int cluesMask[81], int silentMode, int 
         
         geneticKernel<<<ISLANDS, ISLAND_POP_SIZE>>>(d_chromosomes, d_fitness, d_cluesMask, d_noImprovementIsland, d_bestHistoryIsland, d_state, generation, d_mailbox, d_mailboxFull, d_generationalBest, d_stopFlag);
         
-        if ((generation > 0 && generation % MIGRATION_FREQUENCY == 0) || generation == MAX_GENERATIONS - 1) {
+        if ((generation % MIGRATION_FREQUENCY == 0) || generation == MAX_GENERATIONS - 1) {
             int h_generationalBest = 999;
             int h_stopFlag;
 
@@ -615,7 +621,6 @@ int main(int argc, char* argv[]) {
     if (argc > 1) {
         problemLine = atoi(argv[1]);
     } else {
-        srand(time(NULL));
         problemLine = (rand() % 3000000) + 1;
     }
 
@@ -627,7 +632,6 @@ int main(int argc, char* argv[]) {
     }
 
     int currentLine = 0;
-    srand(time(NULL));
 
     if (fgets(line, sizeof(line), file) == NULL) {
         printf("Falha ao ler o CSV\n");
@@ -657,6 +661,8 @@ int main(int argc, char* argv[]) {
             }
 
             printf("Iniciando algoritmo genetico CUDA\n");
+            srand(GLOBAL_SEED + problemLine + runId);
+            
             geneticAlgorithm(sudoku.puzzle, cluesMask, silentMode, problemLine, runId);
         }
     }
